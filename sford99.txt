@@ -1,0 +1,201 @@
+                            Steven Douglas Ford
+                             4032 Chester Drive
+                             Glenview, IL 60025
+                               (847) 291-8254
+
+                            sford@geeky-boy.com
+
+EXPERIENCE:
+
+Nineteen years of professional experience in all phases of product
+development, from initial concept and requirements, through architecture,
+design and development, to introduction in the field.
+
+Experience with many languages, especially C, C++, PERL5, AWK, PL/M,
+PASCAL, and Assembler (68020, 8086). Operating systems programmed for: UNIX
+(kernel and user), MS Windows, VRTX, MTOS, and iRMX, plus targets with no
+formal operating system. Comfortable with source-level and assembly-level
+debuggers, emulators, and logic analyzers. Strong debugging/troubleshooting
+skills.
+
+Familiar with hardware; can design simple circuits and work closely with
+hardware engineers.
+
+October 1997-present Teradyne Incorporated, Deerfield, IL
+
+Software Engineer
+
+Telephone line test equipment for phone company central offices. Software
+written in C and C++ for UNIX host (Sun/Solaris). Worked on TSC (UNIX-based
+system controller).
+
+   * Worked with team of two others to define new Internet test controller.
+     Refined high-level requirements, mapped out architecture and
+     high-level design. Currently in detailed-design phase. Code will use
+     Apache, JRUN, JSP, Java servlets, and Corba on Sun Solaris.
+   * Tracked down Solaris kernel panic that happened rarely and only in the
+     field. Involved using ADB to read kernel dumps, writing analysis tools
+     in Perl5 to reduce data, and instrumenting a STREAMS module. (It was a
+     race condition where a packet was received on a stream that was in the
+     process of closing.)
+   * Led team of UNIX and embedded engineers to define new XDR-based
+     protocol between TSC and new measurement unit. Worked with another
+     engineer in implementation of communication infrastructure for TSC in
+     C++. Involved tracking down subtle incompatibilities between Sun and
+     an embedded TCP implementations (FIN bit processing, aggressive
+     re-transmission, and window advertisements).
+   * Wrote fault-tolerant software download utility (updates software in
+     measurement unit). Unreliability in embedded system required careful
+     sequencing and re-trying to maximize chances for successful download.
+   * Adapted existing "crunch" library to new generation measurement unit.
+     Involved significant reverse-engineering of legacy code, analysis of
+     changes to minimize risk, and re-testing.
+   * Led team of hardware and embedded engineers to determine root causes
+     for inaccurate measurement results. Developed workarounds in TSC to
+     correct for the worst of the inaccuracies.
+
+February 1996-present Future Source Incorporated, Lombard, IL
+
+Software Engineer
+
+Real-time financial market data acquisition and distribution to traders,
+primarily commodities futures.
+
+   * Worked with another engineer to create new web site,
+     http://www.futuresource.com. Designed and implemented the account
+     creation and maintenance CGI scripts. Designed and implemented product
+     pricing database and selection scripts for credit card purchases.
+     Designed and implemented "Talk", a web-based conferencing system.
+     Wrote user FAQs and internal design documentation. All software
+     written in Perl5 (object-oriented with inheritance) and SHTML for
+     Apache server on FreeBSD.
+   * Re-engineered, coded, and tested front-end to LME (London Metals
+     Exchange) data feed. Basic functions include parsing of LME messages,
+     selection and reformatting of messages into common FutureSource
+     internal format, and transmission of message into database system.
+     Also added significant buffering, error detection and logging, and
+     data compression features. Software is spread across 3 cooperating
+     microprocessors, two of them embedded with no operating system, one
+     running MS-DOS. Required significant reverse-engineering of existing
+     software and data feed. Software 100% C.
+   * Fixed numerous bugs to existing networked product client and server,
+     mostly in the proprietary protocol layered on IPX. Most software
+     written in object-oriented C++ for Windows 3.1 and 95.
+
+June 1994-February 1996 Computer Associates, Naperville, IL (formerly
+"Legent", "Lachman")
+
+PMTS (Principal Member of Technical Staff)
+
+STREAMware TCP/IP networking package ("Lachman TCP") for UNIX. Includes
+kernel-level STREAMS modules/drivers plus user-level commands. Software
+100% C.
+
+   * Member of customer support team for OEM customers (SCO, AT&T, Novell),
+     fixing kernel-level bugs. Involved analysis of crash dumps from the
+     field. Example: diagnosed and repaired multiprocessor timing window in
+     IP when bringing down a network interface (improper locking and event
+     handling).
+
+SNX - networking package for Microtec's VRTXsa real-time operating system,
+based on STREAMware TCP/IP and STREAMware Kernel (SwK).
+
+   * Lead engineer for SNX enhancement project. Negotiated requirements and
+     schedules. Assigned work to self and 3 other engineers. Monitored
+     progress and reported to Microtec.
+   * Performed extensive maintenance of existing SNX code, particularly in
+     the SwK Kernel. Included design and implementation of an enhanced
+     STREAMS flow control mechanism to make SwK more deterministic by
+     adding a configurable weighted byte count on STREAMS messages, queues,
+     and priority bands to cause early flow control with small messages.
+   * Fixed problems in the TCP protocol module, the socket interface and
+     various STREAMS device drivers. Example: diagnosed undocumented
+     limitation of LANCE Ethernet chip where an outgoing packet consisting
+     of many small buffers can starve the LANCE output shift register,
+     resulting in a corrupted transmit packet. Changed driver to combine
+     small buffers as needed.
+
+1983-June 1994 Siemens Medical Systems, Hoffman Estates, IL
+
+Served as local expert on C, VRTX32, UNIX, and real-time software in
+general. Steadily improved departmental productivity and quality by
+optimizing the development process, increasing automation and writing
+tools. Engineering management relied on my technical judgment in preparing
+schedules, interviewing new hires, and making product proposals.
+
+1991-1994: Project CE16 - Staff Engineer
+
+CE16 is a medical X-ray imaging system for general angiography which was
+co-developed by engineering departments in the U.S. and Germany. The U.S.
+part is based on 68020 CPU, VRTX32 real-time O.S., and in-house designed
+hardware (evolution of HICOR hardware; see below). Software 95% C, 5%
+assembler.
+
+   * Worked on team of 4 engineering, 4 marketing, and 3 management people
+     to define requirements and high-level specifications for CE16. Worked
+     with marketing and engineering management in Germany and the U.S. to
+     minimize technical complexity while still meeting all customer
+     requirements.
+   * Led a 5-engineer team to define high-level software architecture for
+     CE16. Used strong object orientation. Worked with hardware team to
+     define hardware architecture and hardware/software divisions. Worked
+     with software management to divide work among 15 programmers according
+     to their strengths and desires. Made time estimates.
+   * Designed, coded, and tested the real-time side of a distributed
+     database subsystem. Involved exchanging messages with a UNIX host via
+     SCSI link to access SYBASE records (UNIX software written in Germany).
+     Due to slow SYBASE performance, required extensive caching of data on
+     real-time side. Subsystem supports multiple asynchronous tasks reading
+     and writing data with record locking to synchronize tasks. Used
+     hashing to match arbitrary database keys to cached record.
+
+1987-1991: Project HICOR - Principal Software Engineer
+
+HICOR is a medical X-ray imaging system for cardiac angiography based on
+68020 CPU, VRTX32 O.S., and in-house designed hardware. Software 95% C, 5%
+assembler.
+
+   * Led software architecture definition effort. Helped define schedules.
+   * Designed, coded, and tested serial communications package. Featured
+     multiple serial lines, multiple virtual connections on each serial
+     line, flow control, and automatic error detection and retransmission.
+   * Designed, coded, and tested image review subsystem. Consisted of 3
+     cooperating real-time tasks with differing time constraints
+     controlling the image processing and display hardware.
+
+1983-1987: Project Digitron - Senior Software Engineer
+
+Medical X-ray imaging system for general and cardiac angiography based on
+80386 CPU, Intel iRMX O.S., and proprietary hardware. Software 95% PL/M, 5%
+assembler. 25 staff-years total project effort.
+
+   * Designed, coded, and tested interrupt-based I/O driver. Involved
+     designing and building 5-chip test circuit to simulate data source.
+   * Found little-known glitch in Intel 8259 interrupt controller and
+     devised hardware/software workaround.
+   * Designed, coded, and tested a proprietary Ethernet-based
+     communications protocol and file server to transfer medical images and
+     program files between Digitrons and VAXes. Involved finding and
+     developing fix for a hardware bug on the Ethernet controller board.
+
+1982-1983 Northern Telecom, Morton Grove, IL
+
+Software Engineer
+
+   * Designed, coded, and tested communications package implementing IBM's
+     BISYNC protocol. Assisted in development of HDLC protocol. 100% Z-80
+     assembler.
+
+1980-1982 Fisher Controls, Marshalltown, IA
+
+Software Engineer
+
+   * Designed, coded, and tested various programs for real-time process
+     control. Used Pascal, SL/1 (Fisher's internal version of PL/M), and
+     assembler.
+
+EDUCATION:
+
+   * 5/80 - Bachelor of Science, Iowa State University GPA 3.5/4.0
+
+     Subject: Computer Engineering

@@ -1,0 +1,156 @@
+# HashCalc.pm
+# Copyright 99,00 Steve Ford (sford@geeky-boy.com) and made available under
+#   Steve Ford's "standard disclaimer, policy, and copyright" notice.  See
+#   http://www.geeky-boy.com/standard.html for details.  It is based on
+#   GNU's "copyleft" and basically says that you can have this for free and
+#   give it to anybody else so long as you: 1. don't make a profit from it,
+#   2. include this notice in it, and 3. you indicate any changes you made.
+package HashCalc;
+
+use Exporter ();
+@ISA = qw(Exporter);
+@EXPORT = qw(hash_calculator);
+###@EXPORT_OK = qw();
+
+use Carp;
+
+
+sub hash_calculator {
+	my($href, $calc_str) = @_;
+	my($st, $val, $rest);
+
+###print STDERR "???hash_calculator: calc_str=$calc_str\n";
+	$calc_str =~ s/\s//g;
+
+	while ($calc_str ne "") {
+		# null statement
+		if ($calc_str =~ /^;(.*)$/) {
+			$calc_str =~ s/^;//;			# consume ';'
+
+		# assignment statement
+		} elsif ($calc_str =~ /^\$(\w+)=(.*)$/) {
+			my ($lhs, $rest) = ($1, $2);	# consume rhs and "="
+
+			($st, $val, $rest) = hash_expr($href, $rest);	# consume expr
+			if (!$st) {
+				return (0, "hash_calculator: $val");
+			}
+
+			if ($rest eq "" || $rest =~ /^;/) {
+				$calc_str = $rest;
+				$calc_str =~ s/^;//;		# consume ';'
+
+				$href->{$lhs} = $val;		# Do assignment
+			} else {
+				return (0, "hash_calculator: syntax error ($rest)");
+			}
+
+		# unrecognized statement
+		} else {
+			return (0, "hash_calculator: unrecognized statement ($calc_str)");
+		}
+	}  # while
+
+	return (1, $val);
+}  # hash_calculator
+
+
+sub hash_expr {
+	my ($href, $expr_str) = @_;
+	my ($st, $val, $rest);
+
+###print STDERR "???hash_expr: expr_str=$expr_str\n";
+	# simple variable
+	if ($expr_str =~ /^\$(\w+)(.*)$/) {
+		my ($sym, $rest) = ($1, $2);		# consume variable
+
+		if (defined($href->{$sym})) {
+			return (1, $href->{$sym}, $rest);
+		} else {
+			return (0, "hash_expr: undefined sym ($sym)");
+		}
+
+	} elsif ($expr_str =~ /^\%(\w+)\((.*)$/) {
+		my ($func, $rest) = ($1, $2);		# consume func and "("
+
+		($st, $val, $rest) = hash_func($href, $func, $rest);
+		if (!$st) {
+			return (0, "hash_expr: $val");
+		}
+
+		if ($rest =~ /^\)/) {
+			$rest =~ s/^\)//;		# consume ")"
+			return (1, $val, $rest);
+		} else {
+			return (0, "hash_expr: missing ')' ($rest)");
+		}
+
+	}
+
+	return (0, "hash_expr: syntax error ($expr_str)");
+}  # hash_expr
+
+
+sub hash_func {
+	my ($href, $func, $arg_str) = @_;
+	my ($st, $val, $rest, @args);
+
+###print STDERR "???hash_func: arg_str=$arg_str\n";
+	# Loop arguments till find close paren
+	while (!($arg_str =~ /^\)/)) {
+		# parse an argument
+		($st, $val, $rest) = hash_expr($href, $arg_str);
+		if (!$st) {
+			return (0, "hash_func $func: $val");
+		}
+
+		if (!($rest =~ /[,)]/)) {
+			return (0, "hash_func $func: syntax error ($rest)");
+		}
+
+		push(@args, $val);
+
+		$arg_str = $rest;
+		$arg_str =~ s/,//;		# consume ','
+	}  # while
+
+FUNC:
+	for ($func) {
+		/^add$/ && do {
+			$val = 0;
+			foreach (@args) {
+				$val += $_;
+			}
+			return (1, $val, $arg_str);
+		};
+
+		/^sub$/ && do {
+			if (@args != 2) {
+				return (0, "hash_func $func: needs 2 args ($arg_str)");
+			}
+			return (1, $args[0] - $args[1], $arg_str);
+		};
+
+		/^mul$/ && do {
+			$val = 0;
+			foreach (@args) {
+				$val *= $_;
+			}
+			return (1, $val, $arg_str);
+		};
+
+		/^div$/ && do {
+			if (@args != 2) {
+				return (0, "hash_func $func: needs 2 args ($arg_str)");
+			}
+			return (1, $args[0] / $args[1], $arg_str);
+		};
+
+		do {
+			return (0, "hash_func $func: unknown function");
+		};
+	}  # FUNC
+}  # hash_func
+
+
+1;
