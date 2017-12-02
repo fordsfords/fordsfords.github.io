@@ -1,0 +1,212 @@
+<html><head><title>Fordsfords Git Home</title></head>
+<body>
+<big>'''[[User:Sford]] &gt; [[Sford wiki]]: &gt; CHIP do once'''</big>
+
+<p>These are items which you only need to do once after getting (or re-flashing) your CHIP.
+
+<p>These things should be done in the order presented.
+
+
+__TOC__
+
+
+<p>== Basic Stuff ==
+
+<p>Out of the box, CHIP seems to have a slightly broken "apt-get" system.  Fix it:
+
+<pre>
+sudo cu -l /dev/tty.usbmodem2411 -s 115200
+
+sudo nmtui
+/sbin/ifconfig | grep Bcast  # to get IP address
+~.                                     # exit from cu
+
+ssh 10.0.0.21
+sudo apt-get update  # Have CHIP retrieve the latest software list
+
+sudo apt-get install wireless-tools
+sudo iwconfig wlan0 power off
+
+sudo wget -O/etc/network/if-up.d/wlan_pwr http://fordsfords.github.io/wlan_pwr/wlan_pwr
+sudo chmod +x /etc/network/if-up.d/wlan_pwr
+
+sudo apt-get install -f locales
+sudo locale-gen en_US en_US.UTF-8
+sudo dpkg-reconfigure locales    # Select "en_US" locales.
+sudo dpkg-reconfigure tzdata
+
+sudo apt-get upgrade  # Update Linux software to the latest versions
+
+sudo apt-get install apt-file
+sudo apt-file update
+apt-file search curl.h
+</pre>
+
+
+<p>== Set passwords ==
+
+<p>Out of the box, both the "chip" and "root" accounts have a password of "chip".  Given that most people will enable WIFI, this is a Bad Idea (tm).  Best security practices is to change "chip" password, and *remove* the root password.  You don't want to log in as root, you want to enable "<tt>sudo</tt>" for select user accounts.  Fortunately, out of the box, the "chip" account is enabled for "<tt>sudo</tt>".  If you have a *lot* of root work to do you can always enter "<tt>sudo&nbsp;bash</tt>".
+
+<pre>
+passwd    # change "chip" account's password
+sudo passwd -l root    # lock the root account from direct login
+sudo sed -i.old /etc/ssh/sshd_config -e'/PermitRootLogin/s/yes/no/'    # configure sshd to not allow root
+sudo service ssh restart
+</pre>
+
+
+<p>== Blink ==
+
+<pre>
+sudo wget -O/usr/local/bin/blink.sh http://fordsfords.github.io/blink/blink.sh
+sudo chmod +x /usr/local/bin/blink.sh
+sudo wget -O/etc/systemd/system/blink.service http://fordsfords.github.io/blink/blink.service
+sudo systemctl enable /etc/systemd/system/blink.service
+sudo service blink start
+</pre>
+
+
+<p>== Install languages ==
+
+<pre>
+sudo apt-get install build-essential  # gcc, make, etc.
+sudo apt-get install git
+sudo apt-get install python-dev  # header files you need to build Python extensions
+sudo apt-get install python-pip  # package manager
+sudo apt-get install python-smbus  # includes i2c-tools
+</pre>
+
+
+<p>== Install Apache ==
+
+<p>If you want to run an Apache-based web server, you need to install Apache:
+
+<pre>
+sudo apt-get install apache2
+</pre>
+
+<p>If you want to access user accounts' "<tt>public_html</tt>" areas:
+<pre>
+cd /etc/apache2/mods-enabled
+sudo ln -s ../mods-available/userdir.load
+sudo ln -s ../mods-available/userdir.conf
+mkdir ~/public_html
+</pre>
+
+<p>If you want to be able to run CGI-based programs, enable cgi-bin:
+<pre>
+sudo ln -s ../mods-available/cgi.load
+</pre>
+
+<p>When Apache is configured to your satisfaction, restart it:
+<pre>
+sudo apachectl -k graceful  # restart apache
+</pre>
+
+
+<p>== Install git ==
+
+<p>I'm not sure this is valuable, but I did it:
+<pre>
+sudo apt-get install git
+</pre>
+
+
+<p>== Adafruit GPIO library ==
+
+<p>LED anode is connected through 4.7K to +3.3V; cathode connected to CSID7.
+
+<p>On CHIP:
+<pre>
+sudo apt-get update
+sudo apt-get install build-essential python-pip python-dev python-smbus git
+git clone https://github.com/xtacocorex/Adafruit_Python_GPIO.git
+cd Adafruit_Python_GPIO
+sudo python setup.py install
+cd ..
+git clone git://github.com/xtacocorex/CHIP_IO.git
+cd CHIP_IO
+sudo python setup.py install
+cd ..
+sudo python
+>>> import CHIP_IO.GPIO as G
+>>> G.setup("CSID7", G.OUT)  # LED turns on, meaning output is 0
+>>> G.output("CSID7", G.LOW)
+>>> G.input("CSID7")
+0
+>>> G.output("CSID7", G.HIGH)  # LED turns off, meaning output is 1
+>>> G.input("CSID7")
+1
+>>> G.setup("CSID7", G.IN)  # LED turns off; output is floating
+>>> G.input("CSID7")
+1
+>>> G.output("CSID7", G.LOW)
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+RuntimeError: The GPIO channel has not been setup() as an OUTPUT
+>>> G.cleanup()
+>>>
+</pre>
+
+
+<p>== Poor-man's dropbox ==
+
+<p>On Mac, generate private and public keys:
+<pre>
+$ ssh-keygen -t rsa -b 2048
+Generating public/private rsa key pair.
+Enter file in which to save the key (/Users/sford_itunes/.ssh/id_rsa):
+Enter passphrase (empty for no passphrase):
+Enter same passphrase again:
+Your identification has been saved in /Users/sford_itunes/.ssh/id_rsa.
+Your public key has been saved in /Users/sford_itunes/.ssh/id_rsa.pub.
+</pre>
+
+<p>On Mac, transfer public key to CHIP:
+<pre>
+scp id_rsa.pub chip@10.0.0.21: authorized_keys
+</pre>
+
+<p>On CHIP, set up ssh:
+<pre>
+mkdir .ssh  # might say already exists if you've used ssh on chip already
+chmod 700 .ssh
+mv authorized_keys .ssh/
+chmod 600 .ssh/*
+</pre>
+
+<p>On Mac, test (should not prompt for password):
+<pre>
+ssh chip@10.0.0.21 ls
+</pre>
+
+<p>On CHIP, get rsync (may already be installed, but doesn't hurt):
+<pre>
+sudo apt-get install rsync
+</pre>
+
+<p>On CHIP get and build fswatch (this takes a while)
+<pre>
+wget https://github.com/emcrisostomo/fswatch/releases/download/1.9.2/fswatch-1.9.2.tar.gz
+tar xzf fswatch-1.9.2.tar.gz
+cd fswatch-1.9.2
+./configure CXX=g++
+make
+sudo make install
+sudo ldconfig
+</pre>
+
+
+<p>== GNU SmallTalk ==
+
+<p>Download ftp://ftp.gnu.org/gnu/smalltalk/smalltalk-3.2.5.tar.gz from http://smalltalk.gnu.org
+
+<pre>
+tar xzf smalltalk-3.2.5.tar.gz
+cd smalltalk-3.2.5
+sudo apt-get install gawk
+sudo apt-get install zip
+./configure
+make
+</pre>
+</body></html>
