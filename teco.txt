@@ -1,0 +1,49 @@
+ERfile$  -  open file for read
+EWfile$  -  open file for write
+EC -  closes input and output (with implicit repeated put/yank)
+EX -  equiv to EC followed by exit
+EF -  closes output file (no implicit yank/put)
+Y  -  yank page from read file into buffer (pre-clear)
+A  -  yank page from read file, appending onto buffer
+P  -  put buffer to write file from buffer (post-yank)
+
+ARGS: either 'n' or 'm,n' (the latter always means character positions)
+Z  -  equiv to number of characters in buffer
+.  -  equiv to number of characters in front of current pointer
+H  -  equiv to 0,Z
+Qq -  fetch value in Q-register 'q'
+
+T    -  type by linefeeds (prints in-order with neg arg)
+m,nT -  type by character
+HT   -  heap-big type entire buffer
+V    -  equiv to 0TT
+
+J    -  jump to buffer location (by character), default to 0 (start)
+L    -  move foward (or backward) by linefeeds
+C    -  move forward (or backward) by character
+Stext$  -  search
+Ntext$  -  search across page boundaries (with implicit repeated put/yank)
+FStext$repl$ - search and replace
+FNtext$repl$ - search and replace across page boundaries
+search text: ^X=any char, ^S=any separator, ^EA=alpha, ^ED=digit, ^EL=line term
+             ^ER=alpha/num ^Nx=any char but 'x' (can use ^E sequences)
+             ^ES=1 or more whitespace, ^EV=lower alpha, ^W=upper alpha
+
+Itext$   -  insert
+@I+text+ -  insert with '+' (or whatever) as the delim.  Allows insertting esc.
+D    -  delete by character
+K    -  kill by linefeed
+m,nK -  kill by character
+HK   -  heap-big kill entire buffer
+
+nUq    -  put numeric value 'n' into Q register 'q' (or whatever)
+n%p    -  add 'n' to 'q' and retreive (as arg to next cmd)
+Xq     -  copy text (by linefeed) from buffer to 'q'
+m,nXq  -  copy text (by character) to 'q' (allows arith on '.')
+Qq     -  retrieve numeric value in 'q' (as arg to next cmd)
+Qq=    -  print numeric value in 'q' to screen
+Gq     -  copy text from 'q' into buffer
+Mq     -  execute contents of 'q' as macro
+nMq    -  execute as macro with 'n' as arg to first cmd in macro
+
+n<...> -  loop

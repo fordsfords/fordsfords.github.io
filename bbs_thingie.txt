@@ -1,0 +1,1886 @@
+#!/usr/bin/perl -w
+# bbs_thingie - a general purpose computer conferencing system.  Intended
+#   to be run as a cgi script.  Inspired by yapp.
+#
+# Copyright 1999 Steve Ford (sford@geeky-boy.com) and made available under the
+#   Steve Ford's "standard disclaimer, policy, and copyright" notice.  See
+#   http://www.geeky-boy.com/standard.html for details.  It is based on
+#   GNU's "copyleft" and basically says that you can have this for free and
+#   give it to anybody else so long as you: 1. don't make a profit from it,
+#   2. include this notice in it, and 3. you indicate any changes you made.
+
+# Everything in the outer-level code (i.e. not in function) is pretty
+# generic stuff.  The application-specific stuff is in "do_body()".
+# My "standard" cgi-bin script generic stuff gives me a platform for
+# having users logged in (or not), having a log file and general error
+# handling, getting form submission input through either the GET or POST
+# methods (and also through path-info).
+
+use strict;
+
+my $announcement = "";
+
+use CgiUtils;		# misc utilities handy for cgi scripts
+use Carp;
+use File::Basename;
+use FileHandle;
+use IPC::Open2;
+use UserA;		# handling login stuff
+
+# parameters for flock()
+my $LOCK_SH = 1;
+my $LOCK_EX = 2;
+my $LOCK_NB = 4;
+my $LOCK_UN = 8;
+
+# A few general global variables.
+my $tool = basename($0);
+my $tool_dir = dirname($0);
+my $cur_time = time();
+
+# Read in global config data by first checking "cgi.cfg" and then
+# <toolname>.cfg (which allows for tool-specific overrides).
+my %bbs_cfg;
+read_hash("cgi.cfg", \%bbs_cfg);	# system defaults
+read_hash("$tool.cfg", \%bbs_cfg);	# tool-specific / overrides
+set_cgi_log(mkdef($bbs_cfg{'CGILOG'}));		# log file
+
+# Get submtted key/value pairs
+my @ilines = <>;                                    # POST method (stdin)
+my @fields = ();
+foreach (@ilines) {
+    push(@fields, split('&', $_));
+}
+push(@fields, split('&', $ENV{'QUERY_STRING'}));	# GET method
+
+# Make key/value pairs into hash
+my %query;
+foreach (@fields) {
+	my(@key_val) = split('=', $_, 2);
+	my($key) = unescape_string(mkdef($key_val[0]));
+	my($val) = unescape_string(mkdef($key_val[1]));
+	$query{$key} = $val;
+}
+
+# Sometimes input is supplied as path_info
+my $path_info = mkdef($ENV{'PATH_INFO'});
+$path_info =~ s/^\///;		# strip leading slash
+my @path_info = split(/\//, $path_info);
+
+# Define a few useful variables from the cgi environment
+my $url = $ENV{'REQUEST_URI'} || $tool;   $url =~ s/\/$//;  # no trailing /
+my $script_name = $ENV{'SCRIPT_NAME'} || $tool;
+my $server_port = $ENV{'SERVER_PORT'} || "80";
+if ($server_port eq "80") {
+	$server_port = "";
+} else {
+	$server_port = ":$server_port";
+}
+my $http_host = $ENV{'HTTP_HOST'} || "$ENV{'SERVER_NAME'}$server_port" || "";
+my $cgidir = $script_name;     $cgidir =~ s/\/$tool$//;
+my $browser = browser_type();
+
+# Get client IP address
+my ($via_ip, $http_ip) = ("", "");
+if (defined($ENV{'REMOTE_HOST'})) {
+	$via_ip .= "$ENV{'REMOTE_HOST'}";
+} elsif (defined($ENV{'REMOTE_ADDR'})) {
+	$via_ip .= "$ENV{'REMOTE_ADDR'}";
+}
+if (defined($ENV{'HTTP_X_FORWARDED_FOR'})) {
+	$http_ip = $ENV{'HTTP_X_FORWARDED_FOR'};
+	if (length($via_ip) > 0) {
+		$http_ip .= " via $via_ip";
+	}
+} else {
+	$http_ip = $via_ip;
+}
+
+
+# Variables for web page header.  (Subsequent code can set these to modify
+# how the page gets handled.)
+my $set_expires = "";
+my $set_location = "";
+my $set_cookie = "";
+my $secret_message = "";
+
+# OK, that was all *very* generic.  Now comes the "semi-generic" stuff to
+# allow for logins.
+
+# Allow for web users (the UserA subsystem)
+my $useradir = mkdef($bbs_cfg{'USERADIR'});	# directory holding user accounts
+my $userarealm = mkdef($bbs_cfg{'USERAREALM'});	# cookie name
+my ($stat, $warn, $userobj) = new UserA({CGIDIR=>$cgidir,
+										 BASE=>$useradir,
+										 REALM=>$userarealm});
+html_die($tool, $warn) unless ($stat);
+
+# See if user is logged on (or logging in)
+my ($login_stat, $login_warn) = $userobj->login_session(\%query, \%ENV, $url);
+if ($login_stat == 2) {
+	# User is newly logged in, make sure output page includes cookie.
+	$set_cookie = $login_warn;
+	$login_warn = "";
+	$login_stat = 1;
+}
+
+if ($http_ip =~ /2.kford.soho.enteract.com/) {
+###	whoyou($http_ip);
+}
+
+# Define useful user-oriented vars
+my %newlogin;
+my $username = "";
+my $userdir = "";
+my $fullname = "";
+
+if ($login_stat == 1) {
+	($stat, $warn) = $userobj->read_userhash("newlogin", \%newlogin);
+	html_die($tool, $warn) unless ($stat);
+
+	$username = mkdef($userobj->{'USERNAME'});
+	$userdir = mkdef($userobj->{'USERDIR'});
+	$fullname = mkdef($newlogin{'FULLNAME'});
+	if (length($fullname) == 0) {
+		$fullname = $username;
+	}
+#	if ($username eq "g") {
+#		$secret_message = '<h1><font color="#FF0000">GAIL, YOUR E-MAIL IS OVER QUOTA</font></h1><h3>Just create a new account ... I notice that "goddessgail" is available</h3><hr>';
+#	}
+}
+
+# body (where the application resides).  The "do_body" function should
+# return the html of the result page, including the "<html>" tag but
+# not including the mime stuff.
+
+my $html = do_body();
+
+# Wrap up
+$userobj->close_user;
+
+# Print the result page
+print "Content-Type: text/html\n";
+if (length($set_expires) > 0) {
+	print "$set_expires\n";
+}
+if (length($set_cookie) > 0) {
+	print "$set_cookie\n";
+}
+if (length($set_location) > 0) {
+	print "$set_location\n";
+}
+if (length($secret_message) > 0) {
+	$html =~ s/(<body[^>]*>)/$1 $secret_message/;
+}
+print "\n$html\n";
+
+exit(0);
+
+
+##################################################
+# Application code for bbs_thingie
+##################################################
+
+# define bbs globals
+my %bbs_hash;
+my ($bbsdir, @cflist);
+my ($item_nummsgs, $item_flags, $item_title, $last_acc);
+my ($cfid, $cfdescr);
+my ($itemid, $msgid, $back10);
+my $cmd;
+my $tzo;	# hours difference from server's local time.
+my ($aging, $aging_secs);	# in seconds.
+
+my $guidelineshelp = <<__EOF__;
+<p><font size=6 color="#FF0000">G</font>uidelines: a few informal rules - don't be picky with spelling or grammer, either with your own messages or with others'.  Try to go easy on personal attacks (flames).  <font size=5 color="#FF0000">A certain amount coarse language and sexual content is natural among adults, but don't get carried away.  This isn't a porn site.</font>  On the other hand, if you're easily offended, then maybe this isn't the place for you.
+__EOF__
+
+my $tzhelp = <<__EOF__;
+This server is set to GMT (UTC), so by default, all time are shown per the Grenwich, England time zone (without daylight savings time).  You can tailor your login by entering the number of hours different your time zone is from GMT.  E.g., central United States is 5 hours earlier in the summer, so you should enter -5 (negative because it's earlier than GMT).
+__EOF__
+
+# The central dispatch routine for all bbs_thingie functions.
+sub do_body {
+	my $update_bbshash = 0;
+
+	# Get bbs_thingie config info.
+	$bbsdir = mkdef($bbs_cfg{'BBSDIR'});
+	if (defined($bbs_cfg{'TZHELP'})) {
+		$tzhelp = mkdef($bbs_cfg{'TZHELP'});
+	}
+	if (defined($bbs_cfg{'GUIDELINESHELP'})) {
+		$guidelineshelp = mkdef($bbs_cfg{'GUIDELINESHELP'});
+	}
+	@cflist = read_cflist("$bbsdir/cflist.public");
+	$tzo = 0;
+	$aging = mkdef($bbs_cfg{'AGING'});
+	if (length($aging) == 0) {
+		$aging = 7;		# days
+	}
+	$aging_secs = 60*60*24*$aging;	# seconds
+
+	# Which bbs_thingie function is being performed
+	$cmd = mkdef($path_info[0]);
+
+	if ($login_stat >= 1 && $login_stat <= 2) {
+		# User is logged in, get his profile.  This is not "config" info,
+		# it is the record of his preferences, private cfs, help modes, etc.
+		($stat, $warn) = $userobj->read_userhash("$tool", \%bbs_hash);
+		if (! $stat) {
+			# New user - init his profile.
+			$bbs_hash{"CFLIST"} = `cat $bbsdir/cflist.new`;
+			chomp($bbs_hash{"CFLIST"});
+			$update_bbshash = 1;
+		}
+
+		# See if he has any private cf's.
+		merge_cflist(split(/,/, mkdef($bbs_hash{"CFLIST"})));
+
+		# get his timezone offset from the local time of the server.
+		$tzo = mkdef($newlogin{"TZO"}) || 0;
+
+		# get his item aging preference
+		if (mkdef($bbs_hash{"AGING"}) ne "") {
+			$aging = $bbs_hash{"AGING"};
+			$aging_secs = 60*60*24*$aging;
+		} else {
+			$bbs_hash{"AGING"} = $aging;
+			$update_bbshash = 1;
+		}
+	}
+
+	if ($update_bbshash) {
+		$userobj->write_userhash("$tool", \%bbs_hash);
+	}
+
+	# This is a very coarse locking - one lock for the entire bbs.  It may
+	# not be the most efficient, but it's the safest.
+	my $lockname = "$bbsdir/lockfile";
+	# (fyi: the following open mode will create and clear out the file first.)
+	open(LOCKFILE, "+>$lockname") || html_die($tool, "Can't open lock file $lockname");
+	flock(LOCKFILE, $LOCK_EX) || html_die($tool, "Can't lock file $lockname");
+
+	# Dispatch bbs_thingie command.  I don't remember why I have some of them
+	# carrying the login warning while others don't.  I should really make
+	# warning handling universal - i.e. allow all of them to accept a WARN
+	# input (helps with "location" re-direction).
+	if ($cmd eq "") { return null_cmd($login_warn);
+	} elsif ($cmd eq "logout") { return logout_cmd();
+	} elsif ($cmd eq "showall") { return showall_cmd($login_warn);
+	} elsif ($cmd eq "showcf") { return showcf_cmd($login_warn);
+	} elsif ($cmd eq "showitem") { return showitem_cmd($login_warn);
+	} elsif ($cmd eq "makemsg") { return makemsg_cmd("");
+	} elsif ($cmd eq "makeitem") { return makeitem_cmd("");
+	} elsif ($cmd eq "ignoreitem") { return ignoreitem_cmd("");
+	} elsif ($cmd eq "findcf") { return findcf_cmd("");
+	} elsif ($cmd eq "findmsg") { return findmsg_cmd("");
+	} elsif ($cmd eq "censormsg") { return censormsg_cmd("");
+	} elsif ($cmd eq "uncensormsg") { return uncensormsg_cmd("");
+	} elsif ($cmd eq "bbshash") { return bbshash_cmd("");
+	} elsif ($cmd eq "prefs") { return prefs_cmd($login_warn);
+	} elsif ($cmd eq "search") { return search_cmd($login_warn);
+###	} elsif ($cmd eq "privmsg") { return privmsg_cmd("");
+	}
+
+	html_die($tool, "invalid command ($cmd)");
+}  # do_body
+
+##################################################
+# command functions
+##################################################
+
+
+sub null_cmd {
+	# Force re-execute with home URL
+	$set_location = "Location: http://$http_host$script_name/showall";
+	return "\n";
+}  # null_cmd
+
+
+sub logout_cmd {
+	my ($logout_stat, $logout_warn) = $userobj->logout_session(\%query,
+																\%ENV, $url);
+	if ($logout_stat) {
+		$set_cookie = $logout_warn;
+	} else {
+		html_die($tool, "logout_cmd: $logout_warn");
+	}
+
+###	# Force re-execute with desired URL (default to none)
+###	my $dest = mkdef($query{"DEST"}) || "$script_name/showall";
+###	$set_location = "Location: http://$http_host$dest";
+
+	return <<__EOF__;
+<html><head><title>logout</title></head><body bgcolor="#FFFFFF">
+<h1>You are now logged out, but your password may still be stored in your browser's history.  For highest security, exit your browser</h1>
+</body></html>
+__EOF__
+}  # logout_cmd
+
+
+sub showall_cmd {
+	my ($warn) = @_;
+	my $showcf_script = "$script_name/showcf";
+	my $html_cflist = "";
+	my ($cf, @item_ids, %user_cfhash, %msgs_new, %titles, %last_post);
+	my ($tot_new, $tot_msgs, $tot_items);
+
+	my $grand_tot_new = 0;
+	foreach $cf (@cflist) {
+		$cfid = $cf;
+
+		%user_cfhash = ();
+		read_hash("$userdir/$cfid.dat", \%user_cfhash);
+
+		$tot_new = 0;
+		$tot_msgs = 0;
+		$tot_items = 0;
+
+		@item_ids = count_cf(\%user_cfhash, \%msgs_new, \%titles, \%last_post);
+		foreach (@item_ids) {
+			++ $tot_items;
+			my $aged_out = ($_ ne "00001" && $aging_secs > 0 && $cur_time - $last_post{$_} > $aging_secs);
+			if ($msgs_new{$_} < 0) {
+				$aged_out = 0;
+			}
+			my $ignored = (mkdef($user_cfhash{"ignore-$_"}) || 0);
+			if ($msgs_new{$_} < 0 && (!$ignored)) {
+				$tot_new += 1;
+			} elsif ((!$ignored) && (!$aged_out)) {
+				$tot_new += $msgs_new{$_};
+			}
+			$tot_msgs += $msgs_new{$_} + $user_cfhash{$_};
+		}
+
+		open(CF_TXT, "$bbsdir/$cfid.txt") || html_die($tool, "showall_cmd: open $bbsdir/$cfid.txt failed ($!)");
+		$cfdescr = <CF_TXT>;
+		close(CF_TXT);
+		$html_cflist .= "<p><a href=\"$showcf_script/$cfid\"><b>$cfid</b></a> - <b>$cfdescr</b> ($tot_new msgs new, $tot_msgs msgs total in $tot_items items)\n";
+
+		$grand_tot_new += $tot_new;
+	}
+
+	# Only do the "no new msgs" warning if logged in.
+	if ($warn eq "" && $grand_tot_new == 0 && $username ne "") {
+		$warn = "No new messages, try \"ChkConfs\" again later."
+	}
+
+	my $resp_form = login_form();
+	if (length($username) > 0) {
+        my $form_url = $url;
+		$resp_form = <<__EOF__;
+<h4>Hello $username.  As a logged-in user, you may create accounts for others</h4>
+<form action="$form_url" method="post">
+<p>Full&nbsp;Name:&nbsp;&nbsp;<input type=text font="fixed" name="FULLNAME" size=15>
+<p>New&nbsp;Username:&nbsp;&nbsp;<input type="text" name="NEWUSERNAME" size="10">
+
+<p>New&nbsp;Password:&nbsp;&nbsp;<input type="password" name="NEWPASSWORD" size="10">
+
+<h2><input type="submit" name="NewLogin" value="NewLogin"></h2>
+</form>
+__EOF__
+	}
+
+	my $help = showall_help();
+
+	if (length($warn) > 0) {
+		$warn = "<h2><font color=\"#FF0000\">$warn</font></h2>";
+	}
+
+	my $buttons = html_buttons('fc', 'hp', 'mf', 'lg', 'pr', 'se');
+	my $newbie = "";
+	if ($bbs_hash{"HELP_showall"} >= 1) {
+		$newbie = "<p><font color=\"#408040\">If you're new here, scroll down for some help!</font>";
+	}
+	return <<__EOF__;
+<html><head><title>$tool, Conferences</title></head><body bgcolor="#FFFFFF">
+<h1>Conf List</h1>
+$warn
+$newbie
+<hr>
+$buttons
+$resp_form
+<h1>Available conferences:</h1>
+<ul>
+$html_cflist
+</ul>
+<hr>
+<a name="help"></a>
+$buttons
+$help
+</body></html>
+__EOF__
+}  # showall_cmd
+
+
+sub showcf_cmd {
+	my ($warn) = @_;
+	my ($links, $last_read);
+	my $html_itemlist = "";
+	my (@item_ids, %user_cfhash, %msgs_new, %titles, %last_post);
+
+	$cfid = mkdef($path_info[1]);
+	if (1 != scalar grep {$cfid eq $_} @cflist) {
+		html_die($tool, "showcf_cmd: Sorry, can't access $cfid (" . join(" ", @cflist) . ")");
+	}
+	my $showitem_script = "$script_name/showitem/$cfid";
+	my $ignoreitem_script = "$script_name/ignoreitem/$cfid";
+
+	open(CF_TXT, "$bbsdir/$cfid.txt") || html_die($tool, "showcf_cmd: open $bbsdir/$cfid.txt failed ($!)");
+	$cfdescr = <CF_TXT>;
+	close(CF_TXT);
+
+	read_hash("$userdir/$cfid.dat", \%user_cfhash);
+
+	@item_ids = count_cf(\%user_cfhash, \%msgs_new, \%titles, \%last_post);
+
+	my $tot_new = 0;  my $num_aged = 0;
+	foreach $itemid (@item_ids) {
+		my $tot = $msgs_new{$itemid} + $user_cfhash{$itemid};
+		$last_read = $user_cfhash{$itemid};
+		my $aged_out = ($itemid ne "00001" && $aging_secs > 0 && $cur_time - $last_post{$itemid} > $aging_secs);
+		if ($msgs_new{$itemid} < 0) {
+			$aged_out = 0;
+		}
+
+		my $ignored = (mkdef($user_cfhash{"ignore-$itemid"}) || 0);
+		if ($ignored) {
+			if (mkdef($bbs_hash{"MORE_FUNCTS"})) {
+				$ignored = " - (<b>item ignored</b>, <a href=\"$ignoreitem_script/$itemid/0?DEST=$url\">unignore</a>)";
+			} else {
+				$ignored = " - (<b>item ignored</b>)";
+			}
+		} else {  # item _not_ ignored
+			if (mkdef($bbs_hash{"MORE_FUNCTS"})) {
+				$ignored = " - (<a href=\"$ignoreitem_script/$itemid/1?DEST=$url\">IgnoreItem</a>)";
+			} else {
+				$ignored = "";
+			}
+			# Not ignored, count it toward new (if not aged out).
+			if ($msgs_new{$itemid} < 0) {
+				$tot_new += 1;
+			} elsif (!$aged_out) {
+				$tot_new += $msgs_new{$itemid};
+			}
+		}
+
+		$links = "(<a href=\"$showitem_script/$itemid/$last_read\">$msgs_new{$itemid} msgs</a> new, <a href=\"$showitem_script/$itemid/1\">$tot msgs</a> total)$ignored";
+
+		# item number link is "back 10"
+		my $back_10 = $tot - 9;
+		$back_10 = 1 if ($back_10 < 1);
+
+		if ($aged_out) {
+			++ $num_aged;
+		} else {
+			$html_itemlist .= "<p><a href=\"$showitem_script/$itemid/$back_10\">$itemid</a> - <b>" . re_link($titles{$itemid}) . "</b> $links\n";
+		}
+	}
+
+	if ($num_aged > 0) {
+		$num_aged = "$num_aged items <b>not shown</b> (no activity in past $aging days).  You can <a href=\"$script_name/bbshash/AGING/0?DEST=$url\">disable item aging</a> to show <b>all</b> items.<br>";
+	} elsif ($aging_secs == 0) {
+		$num_aged = "Item aging disabled, all items shown.  Or you can <a href=\"$script_name/bbshash/AGING/7?DEST=$url\">enable item aging (set to 7 days).</a><br>";
+	} else {
+		$num_aged = "";
+	}
+
+	$fullname =~ s/"/\&#34;/g;
+	my $resp_form = login_form();
+	if (length($username) > 0) {
+		$resp_form = <<__EOF__
+<form action="$script_name/makeitem/$cfid" method=post>
+<br><center><b>ENTER NEW ITEM</b>
+<table>
+<tr><td><br>Subject:</td><td><input type=text font="fixed" name="SUBJECT" size=75></td></tr>
+<tr><td><br>Full&nbsp;Name:</td><td><input type=text font="fixed" name="NEWNAME" size=15 value="$fullname"></td></tr>
+<tr><td>Message:</td><td><textarea cols=75 font="fixed" rows=9 name="RESP" wrap="virtual"></textarea></td></tr>
+</table>
+<br>
+<br><b><font color="#000000"><input type=submit value="   Submit   "></font></b>
+<br>(Do not "double click"; just press button once.)</center>
+</form>
+__EOF__
+	}
+
+	my $help = showcf_help();
+
+	my $buttons;
+	if ($tot_new == 0) {
+		$buttons = html_buttons('fc', '-fm', 'cl', 'hp', 'mf', 'lg', 'pr', 'se');
+	} else {
+		$buttons = html_buttons('-fc', 'fm', 'cl', 'hp', 'mf', 'lg', 'pr', 'se');
+	}
+
+	if (length($warn) > 0) {
+		$warn = "<h2><font color=\"#FF0000\">$warn</font></h2>";
+	}
+
+	return <<__EOF__;
+<html><head><title>$tool, Conf: $cfid</title></head><body bgcolor="#FFFFFF">
+<h1>Conf: $cfid - $cfdescr</h1>
+$warn
+<hr>
+$buttons
+<hr>
+<h3>Items available (hit 'Reload' to update):</h3>
+$num_aged
+<font size="small">(hint: for each item, first link shows last 10 msgs, second link shows new msgs, third link shows all msgs)</font>
+$html_itemlist
+<h3><hr></h3>
+$resp_form
+<hr>
+<a name="help"></a>
+$buttons
+$help
+</body></html>
+__EOF__
+}  # showcf_cmd
+
+
+sub showitem_cmd {
+	my ($warn) = @_;
+	my $html_msglist = "";
+	my $msg_string;
+	my (@item_text, $itemids);
+	my $ignore_but = "";
+	my (@item_ids, %user_cfhash, %msgs_new, %titles, %last_post);
+
+	@item_text = read_item();
+
+	my $msgnum = 0; # first element of @item_text is null
+	# modify elements of @item_text "in place" to htmlify
+	foreach $msg_string (@item_text) {
+		# fyi - match fails for first (null) element
+		if ($msg_string =~ /^([^\n]+)\n(.*)$/s) {
+			my ($hdr_txt, $uid, $time, $flags, $fname) = parse_msghdr($1, $msgnum);
+			my $msg_body = re_link(line_wrap($2, 83));
+			if ($flags =~ /c/) {
+				$msg_body = " <b>Msg censored by author</b>\n";
+				if ($uid eq $username) {
+					$hdr_txt .= " (<a href=\"$script_name/uncensormsg/$cfid/$itemid/$msgnum\">uncensor</a>)";
+				}
+			} elsif ($flags =~ /C/) {
+				$msg_body = " <b>Msg censored by ghod</b>\n";
+			} else {
+				if ($uid eq $username) {
+					$hdr_txt .= " (<a href=\"$script_name/censormsg/$cfid/$itemid/$msgnum\">censor</a>)";
+				}
+			}
+			$msg_string =~ s/^([^\n]+)\n(.*)$/<\/pre><hr><b>$hdr_txt<\/b><pre>\n$msg_body/s;
+		}
+		++ $msgnum;
+	}
+
+	$html_msglist = "";
+	my $i;
+	for ($i = $msgid; $i < $msgnum; ++ $i) {
+		$html_msglist .= $item_text[$i] . "\n";
+	}
+	$html_msglist =~ s/^\n<\/pre><hr>//s;
+
+	$fullname =~ s/"/\&#34;/g;
+	my $resp_form = login_form();
+	if (length($username) > 0) {
+		$resp_form = <<__EOF__;
+<form action="$script_name/makemsg/$cfid/$itemid" method=post>
+<br><center><b>ADD MESSAGE</b>
+<table>
+<tr><td><br>Full&nbsp;Name:</td><td><input type=text font="fixed" name="NEWNAME" size=15 value="$fullname"></td></tr>
+<tr><td>Message:</td><td><textarea cols=75 font="fixed" rows=9 name="RESP" wrap="virtual"></textarea></td></tr>
+</table>
+<br>
+<br><b><font color="#000000"><input type=submit value="   Submit   "></font></b>
+<br>(Do not "double click"; just press button once.)</center>
+</form>
+__EOF__
+
+		my %user_cfhash;
+		my ($stat, $msg) = read_hash("$userdir/$cfid.dat", \%user_cfhash);
+		if (! $stat) {
+			# no hash; first time in.  Init.
+			$user_cfhash{"CFNAME"} = $cfid;
+		}
+		$user_cfhash{$itemid} = (scalar @item_text) - 1;	# 1st element null
+		if (mkdef($user_cfhash{"ignore-$itemid"})) {
+			$ignore_but = 'ug';
+		} else {
+			$ignore_but = 'ig';
+		}
+		write_hash("$userdir/$cfid.dat", \%user_cfhash);
+	}
+
+	my $html_title = re_link($item_title);
+
+	my $help = showitem_help();
+
+	read_hash("$userdir/$cfid.dat", \%user_cfhash);
+	@item_ids = count_cf(\%user_cfhash, \%msgs_new, \%titles, \%last_post);
+	my $tot_new = 0;
+	foreach (@item_ids) {
+		my $aged_out = ($_ ne "00001" && $aging_secs > 0 && $cur_time - $last_post{$_} > $aging_secs);
+		if ($msgs_new{$_} < 0) {
+			$aged_out = 0;
+		}
+		my $ignored = (mkdef($user_cfhash{"ignore-$_"}) || 0);
+		if ($msgs_new{$_} < 0 && (!$ignored)) {
+			$tot_new += 1;
+		} elsif ((!$aged_out) && (!$ignored)) {
+			$tot_new += $msgs_new{$_};
+		}
+	}
+
+	my $buttons;
+	if ($tot_new == 0) {
+		$buttons = html_buttons('fc', '-fm', 'il', 'bu', 'rf', 'cl', 'hp', 'mf', 'lg', 'pr', $ignore_but, 'se');
+	} else {
+		$buttons = html_buttons('-fc', 'fm', 'il', 'bu', 'rf', 'cl', 'hp', 'mf', 'lg', 'pr', $ignore_but, 'se');
+	}
+
+	if ($ignore_but eq 'ug') {
+		$ignore_but = "<h3>(Item is being ignored)</h3>";
+	} else {
+		$ignore_but = "";
+	}
+
+	if ($username eq "") {
+		$tot_new = "";
+	} else {
+		if ($tot_new == 0) {
+			$tot_new = "(there are no more new msgs in this conf; try \"ChkConfs\" or \"ListItems\" button.)";
+		} elsif ($tot_new == 1) {
+			$tot_new = "(there is $tot_new more new msg in this conf; try \"ChkItems\" button.)";
+		} else {
+			$tot_new = "(there are $tot_new more new msgs in this conf; try \"ChkItems\" button.)";
+		}
+	}
+
+	if (length($warn) > 0) {
+		$warn = "<h2><font color=\"#FF0000\">$warn</font></h2>";
+	}
+
+	return <<__EOF__;
+<html><head><title>$tool, Conf: $cfid, Item: $itemid</title></head><body bgcolor="#FFFFFF">
+<h3>Conf: $cfid - $cfdescr</h3>
+$warn
+<hr>
+$buttons
+$tot_new
+<hr>
+<h1>Item: $itemid - $html_title</h1>
+$ignore_but
+$html_msglist
+</pre>
+<hr>
+$resp_form
+<hr>
+<a name="help"></a>
+$buttons
+$help
+</body></html>
+__EOF__
+}  # showitem_cmd
+
+
+sub makemsg_cmd {
+	my (@item_text, $msg_time, $msg_body);
+
+	if ($username eq "") {
+		html_die($tool, "makemsg_cmd: You must be logged in to do that");
+	}
+
+	$msg_body = " " . mkdef($query{'RESP'});
+	$msg_body =~ s/\n+$//s;
+	if ($msg_body =~ /^\s*$/) {
+		html_die($tool, "makemsg_cmd: Empty message.  (Cat got your tongue?)");
+	}
+	$msg_body =~ s/\n/\n /gs;
+
+	# See if he changed his full name
+	my $newname = mkdef($query{'NEWNAME'});
+	if ($fullname ne $newname) {
+		$fullname = $newname;
+		$newlogin{'FULLNAME'} = $fullname;
+		$userobj->write_userhash("newlogin", \%newlogin);
+	}
+
+	# read in existing item.
+	@item_text = read_item();
+
+	# add new msg and re-count them
+	$msg_time = $cur_time;
+	push(@item_text, "$username,$msg_time,,$fullname\n$msg_body");
+	$item_nummsgs = (scalar @item_text) - 1;	# first element is always null
+
+	open(CF_TXT, "+<$bbsdir/$cfid/$itemid") || html_die($tool, "makemsg_cmd: open $bbsdir/$cfid/$itemid failed ($!)");
+	print CF_TXT "$item_nummsgs,$msg_time,$item_flags,$item_title";
+	print CF_TXT join("\n\|", @item_text) . "\n";
+	close(CF_TXT);
+
+	my %user_cfhash;
+	read_hash("$userdir/$cfid.dat", \%user_cfhash);
+	my $last_read = mkdef($user_cfhash{$itemid}) || 0;
+
+	# Force re-execute with show command
+	$set_location = "Location: http://$http_host$script_name/showitem/$cfid/$itemid/$last_read";
+	return "\n";
+}  # makemsg_cmd
+
+
+sub censormsg_cmd {
+	my (@item_text);
+
+	if ($username eq "") {
+		html_die($tool, "censormsg_cmd: You must be logged in to do that");
+	}
+
+	# read in existing item.
+	@item_text = read_item();
+
+	if ($item_text[$msgid] =~ /^([^\n]+)\n(.*)$/s) {
+		my ($hdr_txt, $uid, $time, $flags, $fname) = parse_msghdr($1, $msgid);
+		my $msg_body = $2;
+
+		if ($uid ne $username) {
+			html_die($tool, "censormsg_cmd: Wrong user ($uid ne $username)");
+		}
+
+		# Censor the msg (if not already censored)
+		if (! ($flags =~ /c/)) {
+			$flags .= "c";
+		}
+		$item_text[$msgid] = "$uid,$time,$flags,$fname\n$msg_body";
+
+		open(CF_TXT, "+<$bbsdir/$cfid/$itemid") || html_die($tool, "censormsg_cmd: open $bbsdir/$cfid/$itemid failed ($!)");
+		print CF_TXT "$item_nummsgs,$last_acc,$item_flags,$item_title";
+		print CF_TXT join("\n\|", @item_text) . "\n";
+		close(CF_TXT);
+	}
+
+	# Force re-execute with show command
+	$set_location = "Location: http://$http_host$script_name/showitem/$cfid/$itemid/$msgid";
+	return "\n";
+}  # censormsg_cmd
+
+
+sub uncensormsg_cmd {
+	my (@item_text);
+
+	if ($username eq "") {
+		html_die($tool, "uncensormsg_cmd: You must be logged in to do that");
+	}
+
+	# read in existing item.
+	@item_text = read_item();
+
+	if ($item_text[$msgid] =~ /^([^\n]+)\n(.*)$/s) {
+		my ($hdr_txt, $uid, $time, $flags, $fname) = parse_msghdr($1, $msgid);
+		my $msg_body = $2;
+
+		if ($uid ne $username) {
+			html_die($tool, "uncensormsg_cmd: Wrong user ($uid ne $username)");
+		}
+
+		# Uncensor the msg
+		$flags =~ s/c//g;
+		$item_text[$msgid] = "$uid,$time,$flags,$fname\n$msg_body";
+
+		open(CF_TXT, "+<$bbsdir/$cfid/$itemid") || html_die($tool, "uncensormsg_cmd: open $bbsdir/$cfid/$itemid failed ($!)");
+		print CF_TXT "$item_nummsgs,$last_acc,$item_flags,$item_title";
+		print CF_TXT join("\n\|", @item_text) . "\n";
+		close(CF_TXT);
+	}
+
+	# Force re-execute with show command
+	$set_location = "Location: http://$http_host$script_name/showitem/$cfid/$itemid/$msgid";
+	return "\n";
+}  # uncensormsg_cmd
+
+
+sub makeitem_cmd {
+	my (@item_text, $msg_time, $msg_body);
+	my (@item_ids, %user_cfhash, %msgs_new, %titles, %last_post);
+
+	if ($username eq "") {
+		html_die($tool, "makeitem_cmd: You must be logged in to do that");
+	}
+
+	$cfid = mkdef($path_info[1]);
+	if (1 != scalar grep {$cfid eq $_} @cflist) {
+		html_die($tool, "makeitem_cmd: Sorry, can't access $cfid (" . join(" ", @cflist) . ")");
+	}
+
+	$msg_body = " " . mkdef($query{'RESP'});
+	$msg_body =~ s/\n+$//s;
+	if ($msg_body =~ /^\s*$/) {
+		html_die($tool, "makeitem_cmd: Empty message.  (Cat got your tongue?)");
+	}
+	$msg_body =~ s/\n/\n /gs;
+
+	$item_title = mkdef($query{'SUBJECT'});
+	if ($item_title =~ /^\s*$/) {
+		html_die($tool, "makeitem_cmd: Empty subject line.  (Cat got your tongue?)");
+	}
+
+	# See if he changed his full name
+	my $newname = mkdef($query{'NEWNAME'});
+	if ($fullname ne $newname) {
+		$fullname = $newname;
+		$newlogin{'FULLNAME'} = $fullname;
+		$userobj->write_userhash("newlogin", \%newlogin);
+	}
+
+	# DONT read in existing item, empty it.
+	$item_text[0] = "";
+
+	# add new msg and re-count them
+	$msg_time = $cur_time;
+	push(@item_text, "$username,$msg_time,,$fullname\n$msg_body");
+	$item_nummsgs = (scalar @item_text) - 1;	# first element is always null
+
+	# Find next item num
+	@item_ids = count_cf(\%user_cfhash, \%msgs_new, \%titles, \%last_post);
+	my $nxt_item = 1;
+	if (scalar @item_ids > 0) {
+		$nxt_item = $item_ids[(scalar @item_ids) - 1] + 1;
+	}
+	$itemid = sprintf("%05d", $nxt_item);
+
+	open(CF_TXT, ">$bbsdir/$cfid/$itemid") || html_die($tool, "makeitem_cmd: open $bbsdir/$cfid/$itemid failed ($!)");
+	print CF_TXT "$item_nummsgs,$msg_time,,$item_title";
+	print CF_TXT join("\n\|", @item_text) . "\n";
+	close(CF_TXT);
+
+	read_hash("$userdir/$cfid.dat", \%user_cfhash);
+	my $last_read = mkdef($user_cfhash{$itemid}) || 0;
+
+	# Force re-execute with show command
+	$set_location = "Location: http://$http_host$script_name/showitem/$cfid/$itemid/$last_read";
+	return "\n";
+}  # makeitem_cmd
+
+
+sub ignoreitem_cmd {
+	my (%user_cfhash, $ignored, @item_text);
+
+	if ($username eq "") {
+		html_die($tool, "ignoreitem_cmd: You must be logged in to do that");
+	}
+
+	# read in existing item.
+	@item_text = read_item();
+
+	$ignored = mkdef($path_info[3]);
+	if (!($ignored =~ /^\d+$/)) {
+		html_die($tool, "ignoreitem_cmd: bad arg ($ignored)");
+	}
+
+	read_hash("$userdir/$cfid.dat", \%user_cfhash);
+	$user_cfhash{"ignore-$itemid"} = $ignored;
+	write_hash("$userdir/$cfid.dat", \%user_cfhash);
+
+	my $dest = mkdef($query{"DEST"}) || "$script_name/showall";
+	$set_location = "Location: http://$http_host$dest";
+}  # ignoreitem_cmd
+
+
+sub findcf_cmd {
+	if ($username eq "") {
+		html_die($tool, "findcf_cmd: You must be logged in to do that");
+	}
+
+	my ($newcfid) = find_new(@cflist);
+	if ($newcfid eq "") {
+		$set_location = "Location: http://$http_host$script_name/showall";
+		return "\n";
+	}
+
+	$set_location = "Location: http://$http_host$script_name/showcf/$newcfid";
+	return "\n";
+}  # findcf_cmd
+
+
+sub findmsg_cmd {
+	my ($newcfid, $itemid, $msgid);
+
+	if ($username eq "") {
+		html_die($tool, "findmsg_cmd: You must be logged in to do that");
+	}
+
+	$cfid = mkdef($path_info[1]);
+	if (1 != scalar grep {$cfid eq $_} @cflist) {
+		html_die($tool, "findmsg_cmd: Sorry, can't access $cfid (" . join(" ", @cflist) . ")");
+	}
+
+	($newcfid, $itemid, $msgid) = find_new(($cfid));
+
+	if ($newcfid eq "") {
+		return showcf_cmd("No items with new msgs (try 'ChkConfs')");
+	}
+
+	$set_location = "Location: http://$http_host$script_name/showitem/$cfid/$itemid/$msgid";
+	return "\n";
+}  # findmsg_cmd
+
+
+sub bbshash_cmd {
+	my ($hashkey, $hashval, $dest);
+
+	if ($username eq "") {
+		html_die($tool, "bbshash_cmd: You must be logged in to do that");
+	}
+
+	$dest = mkdef($query{"DEST"});
+	if ($dest eq "") {
+		html_die($tool, "bbshash_cmd: DEST missing");
+	}
+
+	$hashkey = mkdef($path_info[1]);
+	html_die($tool, "bbshash_cmd: missing hashkey") if ($hashkey eq "");
+	$hashval = mkdef($path_info[2]);
+
+	$bbs_hash{$hashkey} = $hashval;
+	$userobj->write_userhash("$tool", \%bbs_hash);
+
+	$set_location = "Location: http://$http_host$dest";
+	return "\n";
+}  # bbshash_cmd
+
+
+sub prefs_cmd {
+	my ($warn) = @_;
+	my ($hashkey, $hashval, $dest);
+	my $write_newlogin = 0;  my $write_bbshash = 0;
+
+	if ($username eq "") {
+		html_die($tool, "prefs_cmd: You must be logged in to do that");
+	}
+
+	if (defined $query{"NEWTZO"}) {
+		my $newtzo = mkdef($query{"NEWTZO"}) || 0;
+		if ($newtzo ne $tzo) {
+			$tzo = $newtzo;
+			$newlogin{"TZO"} = $tzo;
+			$write_newlogin = 1;
+		}
+	}
+
+	if (defined $query{"NEWAGING"}) {
+		my $newaging = mkdef($query{'NEWAGING'});
+		if ($aging ne $newaging) {
+			$aging = $newaging;
+			$aging_secs = 60*60*24*$aging;	# seconds
+			$bbs_hash{'AGING'} = $aging;
+			$write_bbshash = 1;
+		}
+	}
+
+	if (defined $query{"NEWNAME"}) {
+		my $newname = mkdef($query{'NEWNAME'});
+		if ($fullname ne $newname) {
+			$fullname = $newname;
+			$newlogin{'FULLNAME'} = $fullname;
+			$write_newlogin = 1;
+		}
+	}
+
+	if ($write_newlogin) {
+		$userobj->write_userhash("newlogin", \%newlogin);
+	}
+	if ($write_bbshash) {
+		$userobj->write_userhash("$tool", \%bbs_hash);
+	}
+
+	my $buttons = html_buttons('fc', 'lg');
+
+	return <<__EOF__;
+<html><head><title>$tool, user preferences</title></head><body bgcolor="#FFFFFF">
+<h1>PREFS</h1>
+$warn
+<hr>
+$buttons
+<hr>
+<form action="$script_name/prefs" method=post>
+<p>Full&nbsp;Name:&nbsp;&nbsp;<input type=text font="fixed" name="NEWNAME" size=15 value="$fullname">
+
+<p>$tzhelp
+<br>Time&nbsp;Zone&nbsp;Offset:&nbsp;&nbsp;<input type=text font="fixed" name="NEWTZO" size=4 value="$tzo">
+<br>
+<br>Age items out after <input type=text font="fixed" name="NEWAGING" size=4 value="$aging"> days (use 0 to disable item aging)
+<br>
+<br><b><font color="#000000"><input type=submit value="   Submit   "></font></b>
+<br>(Do not "double click"; just press button once.)</center>
+</form>
+<hr>
+$buttons
+</body></html>
+__EOF__
+}  # prefs_cmd
+
+
+sub search_cmd {
+	my ($warn) = @_;
+	my $search = mkdef($query{"SEARCH"});
+	my $search_res = "";
+	$search =~ s/^\s+//;
+	$search =~ s/\s+$//;
+
+	if ($search ne "") {
+		$search_res = "<h3>No matches</h3><hr>";
+
+		my $search_str = $search;
+		$search_str =~ s/([\[\]\.\$\^\&\*\-\+\\])/\\$1/g;
+		my @search_strs = split(/\s+/, $search_str);
+
+		# Create file list based on user's confs.
+		my $file_list = "";
+		foreach (@cflist) {
+			$file_list .= " $bbsdir/$_/[0-9]*";
+		}
+
+		my %match_cnts;
+		foreach $search_str (@search_strs) {
+			my @matches = split(/[\s\n]+/, `egrep -li "$search_str" $file_list`);
+			foreach (@matches) {
+				++$match_cnts{$_};
+			}
+		}
+
+		my @matches;
+		foreach (sort(keys %match_cnts)) {
+			if ($match_cnts{$_} == scalar @search_strs) {
+				push(@matches, $_);
+			}
+		}
+
+		foreach (@matches) {
+			s/^$bbsdir\/([^\/]+)\/([^\/]+)$/<a href="$script_name\/showitem\/$1\/$2">conf: $1, item: $2<\/a>/;
+		}
+		if (scalar @matches > 0) {
+			$search_res = join(",<br>\n", @matches) . "<br><hr>\n";
+		}
+	}
+
+	my $buttons = html_buttons('fc', 'lg');
+
+	return <<__EOF__;
+<html><head><title>$tool, search</title></head><body bgcolor="#FFFFFF">
+<h1>SEARCH</h1>
+$warn
+<hr>
+$buttons
+<hr>
+$search_res
+<form action="$script_name/search" method=get>
+<p>Search&nbsp;for:&nbsp;<input type=text font="fixed" name="SEARCH" size=15 value="$search">
+<br>(Press 'Enter' to start search)
+</form>
+<p>Note: enter one or more words separated by spaces.  The search function
+will find only those items that contain ALL of the words.  This search is
+very simple; it doesn't do phrase searching, nor does it do whole-word
+or approximate matching.
+<hr>
+$buttons
+</body></html>
+__EOF__
+}  # search_cmd
+
+
+sub privmsg_cmd {
+	my ($warn) = @_;
+	my $html_msglist = "";
+	my $msg_string;
+
+	if ($username eq "") {
+		html_die($tool, "privmsg_cmd: You must be logged in to do that");
+	}
+
+	my $touser = mkdef($query{"TOUSER"});
+	if ($touser ne "") {
+		my $priv_dir = $userobj->find_userdir($touser);
+		if ($priv_dir eq "") {
+			html_die($tool, "privmsg_cmd: $touser is not a valid user");
+		}
+
+		my $priv_msg = " " . mkdef($query{'PRIV_MSG'});
+		$priv_msg =~ s/\n+$//s;
+		if ($priv_msg =~ /^\s*$/) {
+			html_die($tool, "privmsg_cmd: Empty private message.  (Cat got your tongue?)");
+		}
+		$priv_msg =~ s/\n/\n /gs;
+
+		my $msg_time = $cur_time;
+		$priv_msg = "|$username,$msg_time,,$fullname\n$priv_msg";
+
+		if ( -f "$priv_dir/priv_msgs.txt") {
+			open(PRIV, ">>$priv_dir/priv_msgs.txt") || html_die($tool, "privmsg_cmd: open >>$priv_dir/priv_msgs.txt ($!)");
+		} else {	# new file, start it out right.
+			open(PRIV, ">$priv_dir/priv_msgs.txt") || html_die($tool, "privmsg_cmd: open >$priv_dir/priv_msgs.txt ($!)");
+			print PRIV "\n";	# empty "title"
+		}
+		print PRIV "$priv_msg\n";
+		close(PRIV);
+	}
+
+	if ( -f "$userdir/priv_msgs.txt") {
+		my @msg_text = read_item("$userdir/priv_msgs.txt");
+
+		my $msgnum = 0; # first element of @msg_text is null
+		# modify elements of @msg_text "in place" to htmlify
+		foreach $msg_string (@msg_text) {
+			# fyi - match fails for first (null) element
+			if ($msg_string =~ /^([^\n]+)\n(.*)$/s) {
+				my ($hdr_txt, $uid, $time, $flags, $fname) = parse_msghdr($1, $msgnum);
+				my $msg_body = re_link($2);
+				if ($flags =~ /c/) {
+					$msg_body = " <b>Msg censored by author</b>\n"
+				} elsif ($flags =~ /C/) {
+					$msg_body = " <b>Msg censored by ghod</b>\n";
+				}
+				$msg_string =~ s/^([^\n]+)\n(.*)$/<\/pre><hr><b>$hdr_txt<\/b><pre>\n$msg_body/s;
+			}
+			++ $msgnum;
+		}
+
+		my $i;
+		for ($i = 1; $i < $msgnum; ++ $i) {
+			$html_msglist .= $msg_text[$i] . "\n";
+		}
+	}
+
+	my $resp_form = <<__EOF__;
+<form action="$script_name/privmsg" method=post>
+<br><center><b>SEND PRIVATE MESSAGE</b>
+<table>
+<tr><td><br>Send&nbsp;To:</td><td><input type=text font="fixed" name="TOUSER" size=15></td></tr>
+<tr><td>Message:</td><td><textarea cols=75 font="fixed" rows=9 name="PRIV_MSG" wrap="virtual"></textarea></td></tr>
+</table>
+<br>
+<br><b><font color="#000000"><input type=submit value="   Submit   "></font></b>
+<br>(Do not "double click"; just press button once.)</center>
+</form>
+__EOF__
+
+
+	my $help = "";  ### showall_help();
+
+	if (length($warn) > 0) {
+		$warn = "<h2><font color=\"#FF0000\">$warn</font></h2>";
+	}
+
+	my $buttons = "";  ### html_buttons('fc', 'hp', 'lg');
+	return <<__EOF__;
+<html><head><title>$tool, Private Messaging</title></head><body bgcolor="#FFFFFF">
+$warn
+$buttons
+<h1>Your messages:</h1>
+<ul>
+$html_msglist
+</ul>
+<hr>
+$resp_form
+<hr>
+<a name="help"></a>
+$buttons
+$help
+</body></html>
+__EOF__
+}  # privmsg_cmd
+
+##################################################
+# Misc functs
+##################################################
+
+
+sub login_form {
+	my $form_url = $url;
+
+	return <<__EOF__;
+<table border="2" width="100%" cellspacing="2"><tr><td>
+<h2>You can browse, but you must be logged in to contribute</h2>
+<form action="$form_url" method="post">
+<p>Username:&nbsp;&nbsp;<input type="text" name="USERNAME" size="10">
+
+<p>Password:&nbsp;&nbsp;<input type="password" name="PASSWORD" size="10">
+
+<h2><input type="submit" name="Login" value="Login"></h2>
+</form>
+</td>
+<td>&nbsp;&nbsp;&nbsp;&nbsp;</td>
+<td>
+<h3>Want to contribute but don't have a login?  E-mail any of the current users, or the sysop (sysop&nbsp;at geeky-boy.com)</h3>
+<!-- turn off new account creation
+<form action="$form_url" method="post">
+<p>Full&nbsp;Name:&nbsp;&nbsp;<input type=text font="fixed" name="FULLNAME" size=15>
+<p>New&nbsp;Username:&nbsp;&nbsp;<input type="text" name="NEWUSERNAME" size="10">
+
+<p>New&nbsp;Password:&nbsp;&nbsp;<input type="password" name="NEWPASSWORD" size="10">
+
+<h2><input type="submit" name="NewLogin" value="NewLogin"></h2>
+</form>
+-->
+</td>
+</tr></table>
+__EOF__
+}  # login_form
+
+
+sub count_cf {
+	my ($user_cfhash, $msgs_new, $titles, $last_post) = @_;
+	my ($item_nummsgs, $last_acc, $item_flags, $item_title, $itemid);
+
+	opendir(BBS_DIR, "$bbsdir/$cfid") || html_die($tool, "count_cf: opendir $bbsdir/$cfid failed");
+	# find all non-dot files
+	my @item_files = sort(grep(/^\d+$/, readdir(BBS_DIR)));
+	closedir(BBS_DIR);
+
+	my $curtime = $cur_time;
+	foreach $itemid (@item_files) {
+		open(ITEM_FILE, "$bbsdir/$cfid/$itemid") || html_die($tool, "count_cf: open $bbsdir/$cfid/$itemid failed ($!)");
+		$item_title = <ITEM_FILE>;
+		close(ITEM_FILE);
+		if ($item_title =~ /^(\d+),(\d+),([^,]*),(.*)$/) {
+			$item_nummsgs=$1;  $last_acc=$2;  $item_flags=$3;  $item_title=$4;
+			my $item_age = ($curtime - $last_acc) / (60*60*24);	# days old
+
+			if (defined($user_cfhash->{$itemid})) {
+				$msgs_new->{$itemid} = $item_nummsgs - $user_cfhash->{$itemid};
+			} else {
+				$msgs_new->{$itemid} = $item_nummsgs;
+				$user_cfhash->{$itemid} = 0;
+			}
+
+			$last_post->{$itemid} = $last_acc;
+		} else {
+			$item_nummsgs = 0;  $item_flags = "";  $item_title = "count_cf: bad title ($item_title)";
+			$msgs_new->{$itemid} = 0;
+			$user_cfhash->{$itemid} = 0;
+			$last_post->{$itemid} = 0;
+		}
+		$titles->{$itemid} = $item_title;
+	}
+
+	return @item_files;
+}  # count_cf
+
+
+sub parse_msghdr {
+	my ($msg_txt, $msgnum) = @_;
+	my ($userid, $msg_time, $msg_flags, $username);
+
+	if ($msg_txt =~ /^([^,]+),([^,]+),([^,]*),(.*)$/) {
+		$userid = $1;  $msg_time = $2;  $msg_flags = $3;  $username = $4;
+		return ("Msg $msgnum posted " . localtime($msg_time + ($tzo*60*60)) . " by $userid (" . re_link($username) . ")", $userid, $msg_time, $msg_flags, $username);
+	}
+
+	return ("parse_msghdr: bad msg_txt ($msg_txt)");
+}  # parse_msghdr
+
+
+sub html_buttons {
+	my @button_ids = @_;
+	my @but_list1;
+	my @but_list2;
+	my @but_list3;
+
+	foreach (@button_ids) {
+		my $enable = 1;
+		if (($_ =~ s/^-//)) {
+			$enable = 0;
+		}
+
+		SWITCH: {
+			/^fc$/ && do { pushbut(\@but_list1, "$script_name/findcf", "ChkConfs (find new msgs)", $enable && ($username ne "")); };
+			/^fm$/ && do { pushbut(\@but_list2, "$script_name/findmsg/$cfid", "ChkItems (read new msgs)", $enable && ($username ne "")); };
+			/^cl$/ && do { pushbut(\@but_list1, "$script_name/showall", "ListConfs", $enable); };
+			/^il$/ && do { pushbut(\@but_list2, "$script_name/showcf/$cfid", "ListItems", $enable); };
+			/^bu$/ && do { pushbut(\@but_list2, "$script_name/showitem/$cfid/$itemid/$back10", "Back10Msgs", $enable && $back10); };
+			/^rf$/ && do { pushbut(\@but_list2, "$script_name/showitem/$cfid/$itemid/1", "AllMsgs", $enable && $msgid > 1); };
+			/^lg$/ && do { pushbut(\@but_list1, "$script_name/logout?DEST=$url", "LogOut", $enable && ($username ne "")); };
+			/^mf$/ && do {
+				if (mkdef($bbs_hash{"MORE_FUNCTS"})) {
+					pushbut(\@but_list1, "$script_name/bbshash/MORE_FUNCTS/0?DEST=$url", "FewerFuncts", $enable && ($username ne ""));
+				} else {
+					pushbut(\@but_list1, "$script_name/bbshash/MORE_FUNCTS/1?DEST=$url", "MoreFuncts", $enable && ($username ne ""));
+				}
+			};
+			/^hp$/ && do {
+				if (mkdef($bbs_hash{"HELP_$cmd"})) {
+					pushbut(\@but_list1, "$url#help", "Help", $enable);
+					pushbut(\@but_list3, "$script_name/bbshash/HELP_$cmd/0?DEST=$url", "DisableHelp", $enable && ($username ne ""));
+				} else {
+					pushbut(\@but_list1, "$script_name/bbshash/HELP_$cmd/1?DEST=" . escape_string("$url#help"), "Help", $enable && ($username ne ""));
+				}
+			};
+			/^pr$/ && do { pushbut(\@but_list2, "$script_name/prefs", "Prefs", $enable && ($username ne "")); };
+			/^ig$/ && do { pushbut(\@but_list3, "$script_name/ignoreitem/$cfid/$itemid/1?DEST=$url", "IgnoreItem", $enable && ($username ne "")); };
+			/^ug$/ && do { pushbut(\@but_list3, "$script_name/ignoreitem/$cfid/$itemid/0?DEST=$url", "UnIgnoreItem", $enable && ($username ne "")); };
+			/^se$/ && do { pushbut(\@but_list3, "$script_name/search", "Search", $enable); };
+		}
+	}
+
+	my $html_but = "<center><h3>";
+	if (length($announcement) > 0) {
+		$html_but .= "$announcement<br>";
+	}
+	if (scalar @but_list1) {
+		$html_but .= "|\&nbsp;\&nbsp;" . join("\&nbsp;\&nbsp;|\&nbsp;\&nbsp;", @but_list1) . "\&nbsp;\&nbsp;|";
+	}
+	if (scalar @but_list2) {
+		$html_but .= "<br>|\&nbsp;\&nbsp;" . join("\&nbsp;\&nbsp;|\&nbsp;\&nbsp;", @but_list2) . "\&nbsp;\&nbsp;|";
+	}
+	if (scalar @but_list3 && mkdef($bbs_hash{"MORE_FUNCTS"})) {
+		$html_but .= "<br>|\&nbsp;\&nbsp;" . join("\&nbsp;\&nbsp;|\&nbsp;\&nbsp;", @but_list3) . "\&nbsp;\&nbsp;|";
+	}
+	$html_but .= "</h3></center>";
+
+	return $html_but;
+}  # html_buttons
+
+
+sub pushbut {
+	my ($but_list, $link, $but, $ena) = @_;
+
+	if ($ena) {
+		push(@$but_list, "<a href=\"$link\">$but</a>");
+	} else {
+		push(@$but_list, "<font color=\"#8F8F8F\">$but</font>");
+	}
+}  # pushbut
+
+
+sub read_item {
+	my ($item_file) = @_;
+	my (@item_text, $item_string);
+
+	if ($item_file) {
+	} else {
+		$cfid = mkdef($path_info[1]);
+		if (1 != scalar grep {$cfid eq $_} @cflist) {
+		    html_die($tool, "read_item: Sorry, can't access $cfid (" . join(" ", @cflist) . ")");
+		}
+		$itemid = mkdef($path_info[2]);
+		if (!($itemid =~ /^\d+$/)) {
+			html_die($tool, "read_item: bad itemid ($itemid)");
+		}
+		$msgid = mkdef($path_info[3]) || 0;
+		if ($msgid > 10) {
+			$back10 = $msgid - 10;
+		} else {
+			$back10 = 0;
+		}
+
+		open(CF_TXT, "$bbsdir/$cfid.txt") || html_die($tool, "read_item: open $bbsdir/$cfid.txt failed ($!)");
+		$cfdescr = <CF_TXT>;
+		close(CF_TXT);
+
+		$item_file = "$bbsdir/$cfid/$itemid";
+	}
+
+	open(CF_TXT, "$item_file") || html_die($tool, "read_item: open $item_file failed ($!)");
+	$item_title = <CF_TXT>;
+	if ($item_title =~ /^(\d+),(\d+),([^,]*),(.*)$/) {
+		$item_nummsgs = $1;  $last_acc = $2; $item_flags = $3;  $item_title = $4;
+	} else {
+		$item_nummsgs = 0;  $last_acc = 0;  $item_flags = "";  $item_title = "read_item: bad title ($item_title)";
+	}
+	@item_text = <CF_TXT>;
+	close(CF_TXT);
+
+	# re-parse item, splitting by message (instead of by line).
+	$item_string = "\n" . join("", @item_text);
+	$item_string =~ s/\n+$//s;		# standard form - end of msg has no NL
+	@item_text = split(/\n\|/, $item_string);
+
+	return @item_text;
+}  # read_item
+
+
+sub read_cflist {
+	my ($cflist_file) = @_;
+	my @cflist;
+
+	open(CFLIST, $cflist_file) || html_die($tool, "read_cflist: open $cflist_file failed ($!)");
+	@cflist = <CFLIST>;
+	close(CFLIST);
+
+	chomp(@cflist);
+
+	return @cflist;
+}  # read_cflist
+
+
+sub merge_cflist {
+	my @new_cfs = @_;
+	my $cfid;
+
+	foreach $cfid (@new_cfs) {
+		if (0 == scalar grep {$cfid eq $_} @cflist) {
+			push(@cflist, $cfid);
+		}
+	}
+}  # merge_cflist
+
+
+sub find_new {
+	my @cflist = @_;
+	my ($cf, @item_ids, %user_cfhash, %msgs_new, %titles, %last_post);
+
+	foreach $cf (@cflist) {
+		$cfid = $cf;
+
+		%user_cfhash = ();
+		read_hash("$userdir/$cfid.dat", \%user_cfhash);
+
+		@item_ids = count_cf(\%user_cfhash, \%msgs_new, \%titles, \%last_post);
+		foreach (@item_ids) {
+			my $aged_out = ($_ ne "00001" && $aging_secs > 0 && $cur_time - $last_post{$_} > $aging_secs);
+			if ($msgs_new{$_} < 0) {
+				$aged_out = 0;
+			}
+			my $ignored = (mkdef($user_cfhash{"ignore-$_"}) || 0);
+
+			# negative new count prolly means item restored from
+			# backup.  Bring it up, even if aged out.
+			if (($msgs_new{$_} < 0) && (!$ignored)) {
+				return ($cfid, $_, $user_cfhash{$_} + $msgs_new{$_});
+			} elsif (($msgs_new{$_} > 0) && (!$ignored) && (!$aged_out)) {
+				return ($cfid, $_, $user_cfhash{$_});
+			}
+		}
+	}
+
+	return ("", "", "");
+}  # find_new
+
+
+sub main_help {
+	my ($help_level) = @_;
+	my $help = "";
+
+	if ($help_level >= 1) {
+
+		if ($help_level == 1) {
+			$help .= <<__EOF__;
+
+<h1>BRIEF HELP:</h1>
+<p><font size=7 color="#FF0000">W</font>elcome to $tool, a
+computer conferencing system.
+I love cheat sheets.  Don't you?  (<em>"Just get on with it!</em>")
+OK, OK, sheesh.
+
+<p>It's pretty easy.  First log in.  Then cycle these steps:
+
+<ol>
+<li>Click "ChkConfs".
+<li>Click "ChkItems".  Read all the funny messages.  Respond if you want.
+<li>Keep clicking "ChkItems" 'till you can't any more.
+<li>Start over with "ChkConfs".
+</ol>
+
+<p>When you realize that you have better things to do, click "LogOut".
+__EOF__
+		}
+
+		if ($help_level >= 2) {
+			$help .= <<__EOF__;
+
+<h1>DETAILED HELP:</h1>
+<p><font size=7 color="#FF0000">W</font>elcome to $tool, a
+computer conferencing system.
+Unlike
+computer "chat" rooms, a conferencing system allows people to communicate
+with each other without having to be logged on at the same time.  It's
+more like a message board, but with better organization.
+
+<p>The conferences mentioned below are broad topic areas.  New conferences
+can be created by the $tool administrator (use the "$tool"
+conference to suggest new ones).  Within a conference, discussion is
+divided into <em>items</em>.  An item can be considered a conversation, or
+"thread".  Individual users can add messages to existing items, or create new items whenever they want to.
+
+<p>Inside an item are the actual messages that each user leaves.
+By having things split up like this, it is possible (even natural) to be
+participating in several conversations at the same time.
+__EOF__
+		}
+
+		$help .= <<__EOF__;
+
+<p>There are two ways to use
+"$tool": logged in or "just browsing".  You don't need a Username
+to browse the conferences, but you <em>do</em> need a Username to
+be able to create items or leave messages.
+__EOF__
+
+		if ($username eq "") {
+			$help .= <<__EOF__;
+
+<p><font size=7 color="#FF0000">B</font>ut don't dispair!  You can create your own Username
+very easily!  You won't be asked for any personal information (no e-mail,
+no demographic data, no marketing profiles).
+When you create a Username, choose a single word
+as your "Username"; many people use the first part of their normal
+e-mail address (i.e. the part before the "@"), other people just make
+something up.  So long as you keep your password secret, nobody else
+can use your username.
+__EOF__
+
+			if ($help_level >= 2) {
+				$help .= <<__EOF__;
+You don't even need to
+give your real name under "full name" - many people like to change their
+"full name" depending on their mood.  One day, I might be "Steve Ford";
+another day I might be "deranged and confused".  Certain annoying people
+have even been known to use other user's names in an attempt at forgery.
+But forgery doesn't really work because each user has a unique "Username"
+which cannot be changed.
+__EOF__
+			}
+		}  # if no username
+
+		if ($help_level >= 2) {
+			$help .= <<__EOF__;
+
+<p>A typical way of using $tool is:
+<ol>
+<li>Logged in now?  Good.  Click "ChkConfs (find new msgs)".  This will
+find a conference that has new messages in it.  You'll see a list of
+items (each one is a conversation).
+
+<li>Click "ChkItems (read new msgs)".  You'll see the messages that people
+have left.  Look interesting?  Want to add your two cents?  Fill in the
+"Message" box.  When ready, click "Submit".
+
+<li>Are there more new messages in this same conference?  Look at the
+"ChkItems" button.  If it is dim grey, then you need to switch
+conferences; click "ChkConfs" (step 1).  If "ChkItems" is NOT dim
+grey, then click it again (step 2).
+
+<li>Have something to say but it doesn't fit in any of the existing items?
+Create your OWN item!  Click "ListConfs" and choose the conference
+where you think your items belongs.  Click on that conference's name.
+Then give your new item a title ("Subject") and type it in!  Click
+"Submit" when ready.
+
+<li>When you're all done and want to leave $tool, it's a good idea to
+click "LogOut", especially if other people use the same PC.  If you just
+go to a different web site, that does <em>not</em> automatically log out out!
+</ol>
+
+<p><font size=6 color="#FF0000">D</font>efinitions: a few terms you'll see
+thrown about:
+
+<ul>
+<li><b>Conferences</b> - broad topic areas.  Sometimes abbreviated as "cf".
+
+<li><b>Items</b> - these are found within the conferences, and represent a single
+thread of conversation.  Items contain messages, which should be
+related to the topic area of the conference.
+
+<li><b>posting</b> - just means you wrote somfin...ya posted, ya responded, ya
+messaged.  Sometimes people will call a single message a "post" or a "response".
+
+<li><b>flaming</b> - if you piss someone or something off, or they piss you or
+your thing off, sometimes this evokes a rather biting,
+stinging and caustic post.  You have been flamed.  They have
+been flamed.  Something is burned and charred to a crisp.
+You can tell by the smell...but...do not FEAR!!   You build a
+thick skin, and you get over it.  Or...you log out!!
+Aint the internet fun???  (Some people will even flame you if you
+use too many...uh...what are those little dot-dot-dot thingies called?)
+
+<li><b>drifting</b> - when conversation starts to stray off-topic.  Habitual
+drifters might get flamed by the more anal members.
+
+<p><em>What other terms should I define here???</em>
+</ul>
+__EOF__
+
+			if ($username ne "") {
+				$help .= <<__EOF__;
+
+<p><b>If this help message is too long, you can
+<a href="$script_name/bbshash/HELP_$cmd/1?DEST=$url">shorten it</a>.</b>
+__EOF__
+			}
+		}
+
+		if ($help_level >= 1) {
+			$help .= <<__EOF__;
+
+$guidelineshelp
+__EOF__
+		}
+
+		if ($help_level == 1 && $username ne "") {
+			$help .= <<__EOF__;
+
+<p>If you want, you can get even more
+<a href="$script_name/bbshash/HELP_$cmd/2?DEST=$url">detailed help</a>.
+Or, if you know what you're doing, you can
+<a href="$script_name/bbshash/HELP_$cmd/0?DEST=$url">disable help</a>.
+__EOF__
+		}
+	}
+
+	return $help;
+}  # main_help
+
+
+sub showall_help {
+	if (! defined($bbs_hash{"HELP_showall"})) {
+		$bbs_hash{"HELP_showall"} = 1;
+	}
+
+	my $help = "";
+
+	if ($bbs_hash{"HELP_showall"} >= 1) {
+		my $more_functs = "<li><b>MoreFuncts</b> - Enable another row of buttons with more advanced functions.";
+		if ($bbs_hash{'MORE_FUNCTS'}) {
+			$more_functs = "<li><b>FewerFuncts</b> - Simplify $tool by disabling bottom row of buttons.";
+		}
+
+		$help .= <<__EOF__;
+
+<p><font size=6 color="#FF0000">B</font>utton help.  <b>Note</b>: <em>some buttons appear grey and are disabled if the function doesn't make sense</em>.  E.g. "ChkConfs" if you aren't logged in.
+<ul>
+<li><b>ChkConfs</b> - Check the available conferences for new messages that you
+haven't seen yet.
+$more_functs
+<li><b>LogOut</b> - Always a good idea, especially if other people use your PC.
+Going to a different web site does <em>not</em> log you out of $tool!
+__EOF__
+
+		if ($bbs_hash{'MORE_FUNCTS'}) {
+			$help .= <<__EOF__;
+<li><b>DisableHelp</b> - disable this long help section (it can be re-enabled
+later).  (Note, only disables help for <em>this</em> page.)
+<li><b>Prefs</b> - Set your timezone (so times are shown right), etc.
+<li><b>Search</b> - Search all items in all conferences for desired text.
+__EOF__
+		}
+
+		$help .= "</ul><hr>";
+	}
+
+	$help .= main_help($bbs_hash{"HELP_showall"});
+
+	return $help;
+}  # showall_help
+
+
+sub showcf_help {
+	if (! defined($bbs_hash{"HELP_showcf"})) {
+		$bbs_hash{"HELP_showcf"} = 1;
+	}
+
+	my $help = "";
+
+	if ($bbs_hash{"HELP_showcf"} >= 1) {
+		my $more_functs = "<li><b>MoreFuncts</b> - Enable another row of buttons with more advanced functions.";
+		if ($bbs_hash{'MORE_FUNCTS'}) {
+			$more_functs = "<li><b>FewerFuncts</b> - Simplify $tool by disabling bottom row of buttons.";
+		}
+
+		$help .= <<__EOF__;
+
+<p><font size=6 color="#FF0000">B</font>utton help.  <b>Note</b>: <em>some buttons appear grey and are disabled if the function doesn't make sense</em>.  E.g. "ChkConfs" if you aren't logged in.
+<ul>
+<li><b>ChkItems</b> - Check the items in this conference for new messages
+that you haven't seen yet, and display the first such item.
+<li><b>ChkConfs</b> - Check the available conferences for new messages that you
+haven't seen yet.
+<li><b>ListConfs</b> - See the list of available conferences.
+$more_functs
+<li><b>LogOut</b> - Always a good idea, especially if other people use your PC.
+Going to a different web site does <em>not</em> log you out of $tool!
+__EOF__
+
+		if ($bbs_hash{'MORE_FUNCTS'}) {
+			$help .= <<__EOF__;
+<li><b>DisableHelp</b> - Disable this long help section (it can be re-enabled
+later).  (Note, only disables help for <em>this</em> page.)
+<li><b>Prefs</b> - Set your timezone (so times are shown right), etc.
+<li><b>Search</b> - Search all items in all conferences for desired text.
+__EOF__
+		}
+
+		$help .= "</ul>";
+
+		if ($bbs_hash{'MORE_FUNCTS'}) {
+			$help .= <<__EOF__;
+<p>The <b>IgnoreItem</b> function can be used on items you're not interested
+in following.  When an item is ignored, it can still be brought up
+manually, but it won't come up automatically when ChkConfs or ChkItems
+search for new msgs.
+__EOF__
+		}
+
+		$help .= "<hr>";
+	}
+
+	$help .= main_help($bbs_hash{"HELP_showcf"});
+
+	return $help;
+}  # showcf_help
+
+
+sub showitem_help {
+	if (! defined($bbs_hash{"HELP_showitem"})) {
+		$bbs_hash{"HELP_showitem"} = 1;
+	}
+
+	my $help = "";
+
+	if ($bbs_hash{"HELP_showitem"} >= 1) {
+		my $more_functs = "<li><b>MoreFuncts</b> - Enable another row of buttons with more advanced functions.";
+		if ($bbs_hash{'MORE_FUNCTS'}) {
+			$more_functs = "<li><b>FewerFuncts</b> - Simplify $tool by disabling bottom row of buttons.";
+		}
+
+		$help .= <<__EOF__;
+
+<p><font size=6 color="#FF0000">B</font>utton help.  <b>Note</b>: <em>some buttons appear grey and are disabled if the function doesn't make sense</em>.  E.g. "ChkConfs" if you aren't logged in.
+<ul>
+<li><b>ChkItems</b> - Check the items in this conference for new messages
+that you haven't seen yet, and display the first such item.
+<li><b>ChkConfs</b> - Check the available conferences for new messages that you
+haven't seen yet.
+<li><b>Back10Msgs</b> - Re-display item, starting ten messages earlier.
+<li><b>AllMsgs</b> - Re-display item, starting with first message.
+<li><b>ListItems</b> - See the list of items in this conference.
+<li><b>ListConfs</b> - See the list of available conferences.
+$more_functs
+<li><b>LogOut</b> - Always a good idea, especially if other people use your PC.
+Going to a different web site does <em>not</em> log you out of $tool!
+__EOF__
+
+		if ($bbs_hash{'MORE_FUNCTS'}) {
+			$help .= <<__EOF__;
+<li><b>DisableHelp</b> - Disable this long help section (it can be re-enabled
+later).  (Note, only disables help for <em>this</em> page.)
+<li><b>Prefs</b> - Set your timezone (so times are shown right), etc.
+<li><b>Search</b> - Search all items in all conferences for desired text.
+__EOF__
+		}
+
+		$help .= "</ul><hr>";
+	}
+
+	$help .= main_help($bbs_hash{"HELP_showitem"});
+
+	return $help;
+}  # showitem_help
+
+
+sub re_link {
+	my($in_str) = @_;
+
+	$in_str = htmlify($in_str);
+
+	# reference links
+	$in_str =~ s|\b(re:\s*)(\d+)\b|<a href="$script_name/showitem/$cfid/$itemid/$2">$1$2</a>|gis;
+
+	return $in_str;
+}  # re_link
+
+
+sub html_warn {
+	my ($tool, $err_msg) = @_;
+
+	print <<__EOF__;
+Content-Type: text/html
+Expires: 0
+
+<html>
+<head><title>$tool</title></head>
+<body bgcolor="#FFFFFF">
+
+<hr>
+<h2>$err_msg</h2>
+<hr>
+</body>
+</html>
+__EOF__
+
+	exit;
+}  # html_warn
+
+
+sub line_wrap {
+	my ($msg_txt, $max_len) = @_;
+	my (@in_lines, @out_lines);
+	my $iline;
+
+	if (! $max_len) {
+		$max_len = 80
+	}
+
+	@in_lines = split(/\n/, $msg_txt);
+
+	foreach $iline (@in_lines) {
+		$iline =~ s/ +$//;		# kill trailing spaces.
+
+LONGLINE:
+		while (length($iline) > $max_len) {
+			my $i = $max_len;
+			# The reason for "i>5" is that we don't want silly short lines.
+			while ($i > 5 && substr($iline, $i, 1) ne ' ') {
+				-- $i;
+			}
+			if ($i == 5) {
+				# Couldn't find good breaking point to the left, look right.
+				$i = $max_len;
+				while ($i < length($iline) && substr($iline, $i, 1) ne ' ') {
+					++ $i;
+				}
+				if ($i == length($iline)) {
+					# That's one long line!
+					last LONGLINE;
+				}
+			}
+			push(@out_lines, substr($iline, 0, $i));
+			# skip any extra spaces.
+			while ($i < length($iline) && substr($iline, $i, 1) eq ' ') {
+				++ $i;
+			}
+			$iline = ' ' . substr($iline, $i);  # msg lines have leading space
+		}
+
+		push(@out_lines, $iline);
+	}  # foreach iline
+
+	return join("\n", @out_lines);
+}  # line_wrap
+
+
+sub whoyou {
+	my ($ip) = @_;
+
+	my $greplist = `egrep $ip ../../cgi.log`;
+
+	print <<__EOF__;
+Content-Type: text/html
+Expires: 0
+
+<html>
+<head><title>Who are YOU???</title></head>
+<body bgcolor="#FFFFFF">
+
+<hr>
+<h1>Who are YOU???</h1>
+
+<p>Hey there $ip, I've seen you dropping by for quite some time
+now, but you never log in.
+
+<pre>
+$greplist
+</pre>
+<hr>
+</body>
+</html>
+__EOF__
+
+	exit;
+}  # whoyou
