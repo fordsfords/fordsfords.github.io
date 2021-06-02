@@ -1,0 +1,11 @@
+vim [+loc] [file]  (loc=num, /pat/)
+
+:[size] split [+loc] [file]   :g{U|u}motion - set case
+:[range]g[!]/pat/cmd
+RE: s/\n/\r/  \_ prefix for "and newline" \_[abc]
+    \< begin word, \> end word, \%^ bof, \%$ eof
+    \s white S, \w word W, \a alpha A, \d dig C
+    \e esc, \t tab, \r cr, \n nl, \b bs
+    *, \+, \= (0 or 1), {-} (minimal *),
+    ^, \_^ (mid-pat), $, \_$ (mid-pat)
+    \c ignore case C
