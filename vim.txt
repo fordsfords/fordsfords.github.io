@@ -1,5 +1,4 @@
 vim [+loc] [file]  (loc=num, /pat/)
-
 :[size] split [+loc] [file]   :g{U|u}motion - set case
 :[range]g[!]/pat/cmd
 RE: s/\n/\r/  \_ prefix for "and newline" \_[abc]
@@ -9,3 +8,5 @@ RE: s/\n/\r/  \_ prefix for "and newline" \_[abc]
     *, \+, \= (0 or 1), {-} (minimal *),
     ^, \_^ (mid-pat), $, \_$ (mid-pat)
     \c ignore case C
+:set printoptions=portrait:n  :set printfont=courier:h8
+:hardcopy
