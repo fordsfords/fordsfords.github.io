@@ -1,12 +1,15 @@
-vim [+loc] [file]  (loc=num, /pat/)
-:[size] split [+loc] [file]   :g{U|u}motion - set case
+vim [+loc] [file]  (loc=num, /pat/)                           ™: option-2  µ: option-m  ®: option-r
+:[size] split [+loc] [file]  :only  switch: ^W ^W             screen grab: shift-cmd-4
+:g{U|u}motion - set case
 :[range]g[!]/pat/cmd
+macros: qQ ... q  @Q  Q
+:set spell  ]S  z= suggest  :mkspell! %
 RE: s/\n/\r/  \_ prefix for "and newline" \_[abc]
     \< begin word, \> end word, \%^ bof, \%$ eof
-    \s white S, \w word W, \a alpha A, \d dig C
+    \s white S, \w word W, \a alpha A, \d dig
     \e esc, \t tab, \r cr, \n nl, \b bs
     *, \+, \= (0 or 1), {-} (minimal *),
     ^, \_^ (mid-pat), $, \_$ (mid-pat)
-    \c ignore case C
-:set printoptions=portrait:n  :set printfont=courier:h8
+    \c ignore case
+:set printoptions=portrait:n  :set printfont=courier:h9
 :hardcopy
